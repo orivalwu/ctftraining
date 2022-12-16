@@ -132,15 +132,136 @@ enc_flag = bytes(tmp)
 print(base64.b64decode(enc_flag.decode()))
 ```
 ### 艾克体悟题
-安卓逆向题目，首先让程序跑起来。
+安卓逆向题目，首先让程序跑起来。打开模拟器，安装APK
+```bash
+adb install demo.apk
+```
+运行程序，提示需要打开另外的Activity:
+![](./wp.assets/2022-12-16-10-08-11.png)
+用Jadx查看源代码, 需要打开FlagActivity这个活动，然后点击10000次按钮后才能得到flag。
+![](./wp.assets/1.png)
+
+一种思路是apk反编译后重新打包，将1w该成1次。步骤如下：
+- 下载[apktool](https://ibotpeaches.github.io/Apktool/): 这个工具可以将apk进行反编译和重新打包。执行如下命令：
+  ```bash
+  java -jar apktool_2.7.0.jar d demo.apk -o new1
+  ```
+  在生成的文件夹中，修改smali/com/droidlearn/activity_travel/目录下找到FlagActivity$1.smali文件，将其中的0x2710(10000)修改位0x1即可。修改完后用如下命令重新打包：
+  ```
+  java -jar apktool_2.4.1.jar b new1 -o new2.apk
+  ```
+  直接安装会报错误，因为没有签名
+  ![](./wp.assets/2022-12-16-10-22-30.png)
+- 签名操作：利用keytool进行前面，这个工具只要配置了JAVA环境就有。
+  ```
+  keytool -genkey -alias testalias -keyalg RSA -keysize 2048 -validity 36500 -keystore test.keystore
+  ``` 
+  需要输入口令和一些答案，最后输入y确定即可。
+  生成成功后会在目录下创建test.keystore文件，keytool -list -v -keystore test.keystore查看详细信息，这里的别名(testalias)很重要。然后为apk签名即可：
+  ```
+  jarsigner -verbose -keystore test.keystore -storepass 123456 -signedjar flag.apk new2.apk testalias
+  ```
+  -keystore +签名文件，
+  -sotrepass +签名口令密码,
+  -signedjar后跟三个参数 分别是签名后的apk文件 需要签名的apk文件 签名的别名
+  
+接着就运行
+卸载掉原来安装了的包（com.droidlearn.activity_travel）
+```shell
+adb devices //查看adb连接的设备
+adb shell pm list packages //查看已安装的包名
+adb uninstall packageName //卸载
+```
+安装上重打包的APK
+```
+adb install flag.apk
+```
+
+运行指定的Activity
+```
+adb shell //进入调试
+am start -n 包名/包名.活动名
+```
+例如我们想要启动FlagActivity这个活动，输入：
+```
+am start -n com.droidlearn.activity_travel/com.droidlearn.activity_travel.FlagActivity
+```
+然后自需要点击1次就可以得到flag.
+![](./wp.assets/2022-12-16-10-45-27.png)
+
+
+
+
 
 ## Pwn
 
 
 
 ## Crypto
+### ezRabin
+查看题目内容：
+```python
+from Crypto.Util.number import *
+from somewhere_you_do_not_know import flag
+#flag格式为 flag{XXXX}
+def ezprime(n):
+    p=getPrime(n)
+    while p%4!=3:
+        p=getPrime(n)
+    return p
+p=ezprime(512)
+q=ezprime(512)
+n=p*q
+m=bytes_to_long(flag)
+m=(m<<(300))+getRandomNBitInteger(300)
+assert m**2>n and m<n
+c=pow(m,4,n)
+print('c=',c)
+print('p=',p)
+print('q=',q)
+'''
+c= 59087040011818617875466940950576089096932769518087477304162753047334728508009365510335057824251636964132317478310267427589970177277870220660958570994888152191522928881774614096675980017700457666192609573774572571582962861504174396725705862549311100229145101667835438230371282904888448863223898642183925834109
+p= 10522889477508921233145726452630168129218487981917965097647277937267556441871668611904567713868254050044587941828674788953975031679913879970887998582514571
+q= 11287822338267163056031463255265099337492571870189068887689824393221951058498526362126606231275830844407608185240702408947800715624427717739233431252556379
+就要花里胡哨（
+'''
+```
+这道题考察的是Rabin加密，和RSA有相似之处，但是也有很大的不同。Rabin中e取固定值e=2,p和q都是模4余3的素数。本题e=4只要依据e=2稍作修改，将4次方看做平方外再套一层平方即可，也就是进行两次e=2时的解密，一共得到4*4=16个解，再右移30位后从中找到flag即可。
+```python
+import gmpy2
+from Crypto.Util.number import *
 
+p=10522889477508921233145726452630168129218487981917965097647277937267556441871668611904567713868254050044587941828674788953975031679913879970887998582514571
+q=11287822338267163056031463255265099337492571870189068887689824393221951058498526362126606231275830844407608185240702408947800715624427717739233431252556379
+n=p*q
+e=2
+c=59087040011818617875466940950576089096932769518087477304162753047334728508009365510335057824251636964132317478310267427589970177277870220660958570994888152191522928881774614096675980017700457666192609573774572571582962861504174396725705862549311100229145101667835438230371282904888448863223898642183925834109
+inv_p = gmpy2.invert(p, q)
+inv_q = gmpy2.invert(q, p)
 
+def de_rabin(c):
+    mp = pow(c, (p+1) // 4, p)
+    mq = pow(c, (q+1) // 4, q)
+    a = (inv_p * p * mq + inv_q * q * mp) % n
+    b = n-int(a)
+    c = (inv_p * p * mq - inv_q * q * mp) % n
+    d = n-int(c)
+    return a,b,c,d
+
+'''e=4的解密，就是做两次e=2的rabin解密，
+第一次得到4个解，将4个解作为新的c分别再做一次e=2的rabin解密,
+所以共得到16个解，右移300位后看看哪个解是flag'''
+
+a,b,c,d=de_rabin(c)
+a1,a2,a3,a4=de_rabin(a)
+b1,b2,b3,b4=de_rabin(b)
+c1,c2,c3,c4=de_rabin(c)
+d1,d2,d3,d4=de_rabin(d)
+
+l=[a1,a2,a3,a4,b1,b2,b3,b4,c1,c2,c3,c4,d1,d2,d3,d4]
+for ll in l:
+    print(long_to_bytes(ll>>300))
+```
 
 ## Misc
 
