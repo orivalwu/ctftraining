@@ -509,8 +509,41 @@ int main() {
     cout << enc << endl;
     return 0;
 }
-
 ```
+### Annngrr
+考察用Angr进行符号执行，用IDA载入原程序。分析程序逻辑：输入一个字符串，然后对每个字符做了变化，最后判断是否与已知的字符串相等，典型的输入既是flag的题目。思路就是将输入的flag符号化，然后等程序执行到要判断的地方进行约束求解。
+- 首先从程序中提取已知的字符串的每个字符的ASCII码，可以通过ida中的python脚本来提取
+  ```python
+    startAddr = 0x140005038
+    for i in range(32):
+    print(Byte(startAddr+i),end=",")
+  ```
+- 接着利用Angr进行求解
+  ```python
+  import angr
+  import claripy
+  data=[79,23,12,86,219,103,93,103,50,43,54,3,2,243,161,228,199,39,193,182,76,215,89,161,113,82,154,226,33,150,12,202] #已知的串的ASCII
+  bin_path = "Annnnnggrr.exe"
+  p = angr.Project(bin_path)
+  start_addr = 0x140001103 #跳过scanf，之后手工对某地址的数据进行符号化
+  init_state = p.factory.blank_state(addr=start_addr)
+  password = claripy.BVS("password",32*8) #flag的长度
+  password_addr = 0x140005640 #从源代码中memcmp指令得到输入的字符串存放的地址
+  init_state.memory.store(password_addr,password) #相当于声明变量
+
+  sm = p.factory.simulation_manager(init_state)
+  sm.explore(find=0x14000248A) #0x14000248A是memcp前一条指令，当执行完这条指令后 sm.found = true
+  if sm.found:
+	  check_state = sm.found[0]
+	  for i in range(32):
+		  #检测password中的每一个字符
+		  ch = check_state.memory.load(password_addr+i,1)
+		  check_state.solver.add(ch == data[i]) #添加约束
+	  sol = check_state.solver.eval(password,cast_to=bytes) #进行求解
+	  print(f'solution: {sol}')
+  else:
+	  print("no solution")
+  ```
 
 
 
