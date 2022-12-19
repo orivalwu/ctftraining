@@ -190,11 +190,332 @@ am start -n com.droidlearn.activity_travel/com.droidlearn.activity_travel.FlagAc
 ![](./wp.assets/2022-12-16-10-45-27.png)
 
 
+### ur_so_naive
+仍然是一道安卓逆向的题目，将程序跑起来，要求输入密码，然后判断是否正确。用jadx打开查看源代码如下：
+![](./wp.assets/2.png)
+程序的逻辑是将输入的串加密后，判断是否与已知的字节数组相等。加密的库可以看到是在资源文件夹下的。于是我们的解题思路是：首先得到这个libencry.so的库，然后静态分析其中的加密代码，逆向出解密的代码。
+- 用apktool进行反编译，得到apk的目录。用IDA打开lib目录下的arm64-v8a中的libencry动态连接库文件。
+  ```
+  java -jar apktool_2.7.0.jar d demo.apk -o new1
+  ```
+直接查看MainActivity_encry会由于没有识别导入JNIEnv结构体让IDA分析的比较乱，需要我们手动去修改一下函数的参数
+![](./wp.assets/3.png)
+
+选择``MainActivity_encry``的参数，按y进行修改，修改成如下的内容：
+```
+__int64 __fastcall Java_com_new_1star_1ctf_u_1naive_MainActivity_encry(JNIEnv *env, jstring *jstring, unsigned int size, void *a5)
+```
+这样IDA就能识别JDNI结构体，代码的可读性提高不少。
+
+- 分析代码：
+```c
+__int64 __fastcall Java_com_new_1star_1ctf_u_1naive_MainActivity_encry(JNIEnv *env, jobject obj, jstring *jstring, unsigned int size, void *a5)
+{
+  const jbyte *input; // x21
+  const char *key; // x23
+  jbyteArray len; // x22
+  __int64 v11; // x8
+  unsigned int v12; // w11
+  __int64 v13; // x13
+  unsigned int v14; // w11
+  jbyte v15; // w12
+  jbyte v16; // w12
+  jbyte v17; // w12
+  bool v18; // zf
+
+  input = (*env)->GetStringUTFChars(env, jstring, 0LL);// 输入的字符串
+  key = (*env)->GetStringUTFChars(env, a5, 0LL);// 密钥key="FALL"
+  len = (*env)->NewByteArray(env, size);
+  if ( size )
+  {
+    v11 = 0LL;
+    do
+    {
+      v12 = (unsigned __int8)input[v11];
+      if ( size - 1LL == v11 )
+        v13 = 0LL;
+      else
+        v13 = v11 + 1;
+      input[v11] = ((unsigned __int8)input[v11] >> 1) & 0x7F | (input[v11] << 7);
+      v14 = ((v12 >> 1) & 0xFFFF807F | ((unsigned __int8)v12 << 7)) ^ *(unsigned __int8 *)key;
+      v15 = ((_BYTE)v14 << 6) | ((unsigned __int8)v14 >> 2);
+      input[v11] = v15;
+      v16 = (32 * (v15 ^ key[1])) | ((unsigned __int8)(v15 ^ key[1]) >> 3);
+      input[v11] = v16;
+      v17 = (16 * (v16 ^ key[2])) | ((unsigned __int8)(v16 ^ key[2]) >> 4);
+      input[v11] = v17;
+      LOBYTE(v14) = v17 ^ key[3];
+      input[v11] = v14;
+      v18 = size == v11 + 1;
+      input[v11++] = v14 ^ input[v13];
+    }
+    while ( !v18 );
+  }
+  (*env)->SetByteArrayRegion(env, len, 0LL, size, input);
+  return (__int64)len;
+}
+```
+因为key和加密之后的enc都是可以在源代码中获得的，就可以直接用爆破的方式来求解输入，求解代码如下：
+```cpp
+//solve.cpp
+#include <iostream>
+#include <string>
+#include <windows.h>
+using namespace std;
+
+#define lobyte(x)   (*((BYTE*)&(x)))   // low byte
+
+void func(char* input,char* key,int size) {
+    __int64 index; // x8
+    unsigned int v12; // w11
+    __int64 v13; // x13
+    unsigned int v14; // w11
+    bool v18; // zf
+    unsigned int v15, v16, v17;
+
+    index = 0LL;
+    do
+    {
+        v12 = (unsigned __int8)input[index];
+        if (size - 1LL == index)
+            v13 = 0LL;
+        else
+            v13 = index + 1;
+        input[index] = ((unsigned __int8)input[index] >> 1) & 0x7F | (input[index] << 7);
+        v14 = ((v12 >> 1) & 0xFFFF807F | ((unsigned __int8)v12 << 7)) ^ *(unsigned __int8*)key;
+        v15 = ((BYTE)v14 << 6) | ((unsigned __int8)v14 >> 2);
+        input[index] = v15;
+        v16 = (32 * (v15 ^ key[1])) | ((unsigned __int8)(v15 ^ key[1]) >> 3);
+        input[index] = v16;
+        v17 = (16 * (v16 ^ key[2])) | ((unsigned __int8)(v16 ^ key[2]) >> 4);
+        input[index] = v17;
+        lobyte(v14) = v17 ^ key[3];
+        input[index] = v14;
+        v18 = size == index + 1;
+        input[index++] = v14 ^ input[v13];
+    } while (!v18);
+}
+
+int main() {
+	char enc[] = { -36, 83, 22, -117, -103, -14, 8, 19, -47, 47, -110, 71, 2, -21, -52, -36, 24, -121, 87, -114, -121, 27, -113, -86 };
+    int len = 24;
+    char flag[25] = { 0 };
+    char key[] = "FALL";
+    flag[0] = 'f';
+    flag[1] = 'l';
+    char tmp[25] = { 0 };
+
+    for (int i = 2; i < 24; i++) {
+        for (int j = 0; i < 256; j++) {
+            strcpy(tmp, flag);
+            tmp[i] = j;
+            func(tmp, key, len);
+            if (tmp[i - 1] == enc[i - 1]) {
+                flag[i] = j;
+                break;
+            }
+        }
+    }
+    cout << flag;
+}
+```
+
+
+
+
+### Likemyasp
+本题需要用x64dbg手动脱ASP壳，关键是要找到OEP（origin entry point）:程序原始入口点。
+>EP(Entry Point)，意即程序的入口点。而OEP是程序的原始入口点，一个正常的程序只有EP，只有入口点被修改的程序(加壳等)，才会拥有OEP。
+OEP：(Original Entry Point)，程序的原始入口点，软件加壳就是隐藏了EP， 只要我们找到程序的OEP，就可以立刻脱壳。 PUSHAD （压栈） 代表程序的入口点
+POPAD （出栈） 代表程序的出口点，与PUSHAD相对应，一般找到这个OEP就在附近。
+脱壳过程：
+
+1. 用X64DBG载入程序，按``F9``让程序执行到EntryPoint的地方。
+![](./wp.assets/2022-12-18-09-57-48.png)
+2. 按``F8``，发现只有RSP寄存器的发生变化，符合ESP脱壳定律
+![](./wp.assets/4.png)
+3. 在寄存器窗口，点击RSP的值然后右键 => 在转储中跟随 
+![](./wp.assets/2022-12-18-10-03-01.png)
+4. 可以看到在左下方内存窗口有用红色下划线标记的值，在内存窗口右键 => 断点 => 硬件，存取 => 四字节
+![](./wp.assets/5.png)
+5. 下好硬件断点后，按F9运行到断点处，发现程序停在了几个连续的POP后面
+![](./wp.assets/6.png) 
+6. 可以看到下面有一个jmp的大跳指令，在这个地方下个断点，然后按``F9``运行到断点处，接着按``F7``单步步入。
+![](./wp.assets/7.png)
+7. 将要执行的是``sub rsp,28``,接下来就可以dump了
+![](./wp.assets/2022-12-18-10-23-54.png) 
+8. 点击菜单栏Scylla按钮, 选择转储即可
+![](./wp.assets/8.png)
+
+用IDA打开dump得到的可执行程序，可以在Main中看到程序逻辑：
+```c
+int __cdecl main(int argc, const char **argv, const char **envp)
+{
+  __int64 *v3; // rdx
+  __int64 v4; // r8
+  int i; // [rsp+20h] [rbp-158h]
+  int j; // [rsp+28h] [rbp-150h]
+  __int64 v8[30]; // [rsp+50h] [rbp-128h]
+  char v9[32]; // [rsp+140h] [rbp-38h] BYREF
+
+  sub_7FF6A9481070(qword_7FF6A9483240, argv, envp);
+  sub_7FF6A9481140(&qword_7FF6A9483250, v9, 30i64);
+  for ( i = 0; i < 24; i += 4 )
+  {
+    v3 = ((i >> 31) & 3);
+    v8[i / 4] = ~v9[i + 3] | ((v9[i + 2] ^ 0x1Ei64) << 14) | ((v9[i + 1] ^ 0x14i64) << 23) | ((v9[i] ^ 0xAi64) << 37);
+  }
+  for ( j = 0; j < 6; ++j )
+  {
+    v3 = qword_7FF6A9484038;
+    if ( v8[j] != qword_7FF6A9484038[j] )
+    {
+      sub_7FF6A9481070(qword_7FF6A9483258, qword_7FF6A9484038, v4);
+      return 0;
+    }
+  }
+  sub_7FF6A9481070(qword_7FF6A9483268, v3, v4);
+  return 0;
+}
+```
+解密脚本
+```cpp
+#include <iostream>
+#include <string>
+#include <windows.h>
+using namespace std;
+
+int main() {
+	__int64 enc[6] = { 0xD803C1FC098,0x0E20360BC097,0x0FE02A1C00A0,0x0FA0121040CB,0x0F2032104092,0x0D6015884082 };
+	for (int i = 0; i < 6; i++) {
+		cout << (char)(((enc[i] >> 37) ^ 0xa) % 256);
+		cout << (char)(((enc[i] >> 23) ^ 0x14) % 256);
+		cout << (char)(((enc[i] >> 14) ^ 0x1E) % 256);
+		cout << ((unsigned char)(~enc[i]));
+	}
+}
+```
+
+### EzTea
+IDA查看程序的源代码，发现加密函数如下，根据特征可以判断这是XXTEA加密。从Wiki上找到标准的XXTEA加解密的代码如下：
+```c
+  #define DELTA 0x9e3779b9
+  #define MX ((z>>5^y<<2) + (y>>3^z<<4) ^ (sum^y) + (k[p&3^e]^z))
+  
+  long btea(long* v, long n, long* k) {
+    unsigned long z=v[n-1], y=v[0], sum=0, e, DELTA=0x9e3779b9;
+    long p, q ;
+    if (n > 1) {          /* Coding Part */
+      q = 6 + 52/n;
+      while (q-- > 0) {
+        sum += DELTA;
+        e = (sum >> 2) & 3;
+        for (p=0; p<n-1; p++) y = v[p+1], z = v[p] += MX;
+        y = v[0];
+        z = v[n-1] += MX;
+      }
+      return 0 ; 
+    } else if (n < -1) {  /* Decoding Part */
+      n = -n;
+      q = 6 + 52/n;
+      sum = q*DELTA ;
+      while (sum != 0) {
+        e = (sum >> 2) & 3;
+        for (p=n-1; p>0; p--) z = v[p-1], y = v[p] -= MX;
+        z = v[n-1];
+        y = v[0] -= MX;
+        sum -= DELTA;
+      }
+      return 0;
+    }
+    return 1;
+  }
+```
+修改一下IDA反编译后的源码（按``n``修改变量名，按``y``修改函数参数类型），方便和标准的XXTEA进行对比:
+![](wp.assets/9.png)
+需要修改的地方
+```c
+// 以下是修改後：
+#define DELTA 0x11451400
+#define MX (((z>>4^y<<2) + (y>>3^z<<5)) ^ ((sum^y) + (key[(p&3)^e] ^ z)))
+```
+
+解密代码：
+```cpp
+#include <stdio.h>  
+#include <stdint.h>  
+#include <iostream>
+using namespace std;
+
+#define DELTA 0x11451400
+#define MX (((z>>4^y<<2) + (y>>3^z<<5)) ^ ((sum^y) + (key[(p&3)^e] ^ z)))  
+
+void xxtea(uint32_t* v, int n, uint32_t const key[4])
+{
+    uint32_t y, z, sum;
+    unsigned p, rounds, e;
+    if (n > 1)            /* Coding Part */
+    {
+        rounds = 6 + 52 / n;
+        sum = 0;
+        z = v[n - 1];
+        do
+        {
+            sum += DELTA;
+            e = (sum >> 2) & 3;
+            for (p = 0; p < n - 1; p++)
+            {
+                y = v[p + 1];
+                z = v[p] += MX;
+            }
+            y = v[0];
+            z = v[n - 1] += MX;
+        } while (--rounds);
+    }
+    else if (n < -1)      /* Decoding Part */
+    {
+        n = -n;
+        rounds = 6 + 52 / n;
+        sum = rounds * DELTA;
+        y = v[0];
+        do
+        {
+            e = (sum >> 2) & 3;
+            for (p = n - 1; p > 0; p--)
+            {
+                z = v[p - 1];
+                y = v[p] -= MX;
+            }
+            z = v[n - 1];
+            y = v[0] -= MX;
+            sum -= DELTA;
+        } while (--rounds);
+    }
+}
+
+int main() {
+    unsigned char enc[] =
+    {
+      0x82, 0x8A, 0xFA, 0x38, 0x80, 0x13, 0x50, 0xD7, 0x9D, 0x96,
+      0x40, 0x0E, 0x20, 0x91, 0x16, 0x4E, 0xAB, 0x29, 0x3A, 0x71,
+      0x3D, 0x39, 0xE5, 0x6C, 0x2E, 0x75, 0x9D, 0xB6, 0xE6, 0x88,
+      0x1A, 0x84, 0x59, 0xB4, 0x31, 0x6F, 0x00, 0x00, 0x00, 0x00
+    };
+
+    uint32_t key[] = { 0x19,0x19,0x8,0x10 };
+		// 傳入-9代表解密
+    xxtea((uint32_t*)enc, -9, (uint32_t*)key);
+
+    cout << enc << endl;
+    return 0;
+}
+
+```
 
 
 
 ## Pwn
-
+### ret2shellcode
 
 
 ## Crypto
